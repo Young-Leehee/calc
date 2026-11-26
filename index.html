@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="생활계산기">
 <meta name="theme-color" content="#111318">
 <link rel="apple-touch-icon" href="icon.png">
@@ -16,9 +16,9 @@
 html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;}
 body{display:flex;flex-direction:column;height:100dvh;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);overscroll-behavior:none;}
 button{touch-action:manipulation;font-family:inherit;}
-nav{display:flex;gap:6px;overflow-x:auto;padding:10px 12px;flex:none;scrollbar-width:none;}
+nav{display:flex;gap:6px;overflow-x:auto;padding:14px 12px 10px;flex:none;scrollbar-width:none;}
 nav::-webkit-scrollbar{display:none;}
-nav button{flex:none;border:0;border-radius:999px;padding:8px 14px;font-size:15px;background:var(--panel);color:var(--sub);}
+nav button{flex:none;border:0;border-radius:999px;padding:10px 16px;font-size:15px;background:var(--panel);color:var(--sub);-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;}
 nav button.on{background:var(--accent);color:#fff;}
 main{flex:1;overflow-y:auto;padding:4px 14px 10px;}
 section{display:none;} section.on{display:block;}
@@ -45,6 +45,15 @@ select{font-size:17px;}
 #pad .f{background:var(--key2);font-size:20px;}
 #pad .o{background:var(--op);color:#fff;}
 #pad .s{height:40px;font-size:17px;background:transparent;color:var(--sub);border:1px solid var(--line);}
+#sheet{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:flex-end;z-index:10;}
+#sheet[hidden]{display:none;}
+.sheet-box{width:100%;background:var(--panel);border-radius:20px 20px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom));}
+.sheet-title{font-size:17px;font-weight:600;margin-bottom:8px;text-align:center;}
+.orow{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);font-size:17px;}
+.orow span{flex:1;}
+.orow button{width:48px;height:40px;border:0;border-radius:10px;background:var(--key2);color:var(--text);font-size:18px;}
+.orow button:disabled{opacity:.3;}
+#orderDone{width:100%;margin-top:14px;height:48px;border:0;border-radius:12px;background:var(--accent);color:#fff;font-size:17px;}
 </style>
 </head>
 <body>
@@ -58,7 +67,6 @@ select{font-size:17px;}
   <div id="history"></div>
   <input id="expr" class="num" inputmode="none" autocomplete="off">
   <div id="preview"></div>
-  <div class="hint">숫자 사이를 탭하거나 ◀ ▶로 커서를 옮겨 그 위치에서 입력·삭제할 수 있습니다. 기록을 탭하면 다시 불러옵니다.<br>1000+10% = 1100, 1000×10% = 100</div>
 </section>
 
 <section id="area">
@@ -119,6 +127,14 @@ select{font-size:17px;}
   <button data-k="0">0</button><button data-k="00">00</button><button data-k=".">.</button><button class="o" data-k="=">=</button>
 </div>
 
+<div id="sheet" hidden>
+  <div class="sheet-box">
+    <div class="sheet-title">기능 순서 편집</div>
+    <div id="orderList"></div>
+    <button id="orderDone">완료</button>
+  </div>
+</div>
+
 <script>
 const $=id=>document.getElementById(id);
 const store={get(k,d){try{const v=localStorage.getItem(k);return v===null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
@@ -127,7 +143,7 @@ const clean=v=>String(Number(v.toPrecision(12)));
 const fmt=(v,d=0)=>v==null||!isFinite(v)?'-':v.toLocaleString('ko-KR',{maximumFractionDigits:d});
 const row=(k,v,big)=>`<div class="row"><span>${k}</span>${big?'<b>'+v+'</b>':'<span style="color:var(--text)">'+v+'</span>'}</div>`;
 
-/* ---------- 계산식 해석 (eval 사용 안 함) ---------- */
+/* ---------- 계산식 해석 ---------- */
 function evaluate(src){
   const s=String(src).replace(/,/g,'').replace(/×/g,'*').replace(/÷/g,'/').replace(/−/g,'-').replace(/\s/g,'');
   if(!s) return null;
@@ -266,21 +282,56 @@ function ageCalc(){
 ['d1','d2'].forEach(id=>['input','change'].forEach(ev=>$(id).addEventListener(ev,()=>{diffCalc();addCalc()})));
 ['birth','ageBase'].forEach(id=>['input','change'].forEach(ev=>$(id).addEventListener(ev,ageCalc)));
 
-/* ---------- 탭 ---------- */
+/* ---------- 탭 + 순서 편집 ---------- */
+const nav=document.querySelector('nav');
+let order=store.get('order',null), lpTimer=null, lpFired=false;
+
 function showTab(t){
-  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
+  nav.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
   document.querySelectorAll('section').forEach(s=>s.classList.toggle('on',s.id===t));
   const first=$(t).querySelector('input.num'); active=first||null;
   pad.style.display=first?'':'none';
   if(first) setCaret(first,first.value.length); else if(document.activeElement) document.activeElement.blur();
   store.set('tab',t);
 }
-document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>showTab(b.dataset.t));
+function applyOrder(){
+  const idx=t=>{const i=(order||[]).indexOf(t);return i<0?999:i};
+  [...nav.querySelectorAll('button')].sort((a,b)=>idx(a.dataset.t)-idx(b.dataset.t)).forEach(b=>nav.appendChild(b));
+}
+function saveOrder(){order=[...nav.querySelectorAll('button')].map(b=>b.dataset.t);store.set('order',order)}
+function renderOrder(){
+  const btns=[...nav.querySelectorAll('button')],list=$('orderList'); list.innerHTML='';
+  btns.forEach((b,i)=>{
+    const r=document.createElement('div'); r.className='orow';
+    r.innerHTML=`<span>${b.textContent}</span><button ${i===0?'disabled':''}>▲</button><button ${i===btns.length-1?'disabled':''}>▼</button>`;
+    const [up,down]=r.querySelectorAll('button');
+    up.onclick=()=>{nav.insertBefore(b,btns[i-1]);saveOrder();renderOrder()};
+    down.onclick=()=>{nav.insertBefore(btns[i+1],b);saveOrder();renderOrder()};
+    list.appendChild(r);
+  });
+}
+function openSheet(){if(document.activeElement)document.activeElement.blur();renderOrder();$('sheet').hidden=false}
+function closeSheet(){$('sheet').hidden=true;const on=nav.querySelector('.on');if(on)showTab(on.dataset.t)}
+$('orderDone').onclick=closeSheet;
+$('sheet').addEventListener('click',e=>{if(e.target.id==='sheet')closeSheet()});
+
+nav.addEventListener('pointerdown',e=>{
+  if(!e.target.closest('button')) return;
+  lpFired=false; clearTimeout(lpTimer);
+  lpTimer=setTimeout(()=>{lpFired=true;openSheet()},500);
+});
+['pointerup','pointercancel','pointerleave'].forEach(ev=>nav.addEventListener(ev,()=>clearTimeout(lpTimer)));
+nav.addEventListener('scroll',()=>clearTimeout(lpTimer));
+nav.addEventListener('contextmenu',e=>e.preventDefault());
+nav.querySelectorAll('button').forEach(b=>b.onclick=()=>{
+  if(lpFired){lpFired=false;return}
+  showTab(b.dataset.t);
+});
 
 /* ---------- 시작 ---------- */
 $('cur').value=store.get('cur','USD'); $('cur').onchange=fxLabels; fxLabels();
 const td=iso(todayT()); $('d1').value=td; $('d2').value=td; $('ageBase').value=td;
-renderHist(); diffCalc(); showTab(store.get('tab','calc'));
+applyOrder(); renderHist(); diffCalc(); showTab(store.get('tab','calc'));
 if('serviceWorker' in navigator && location.protocol==='https:') navigator.serviceWorker.register('sw.js').catch(()=>{});
 </script>
 </body>
